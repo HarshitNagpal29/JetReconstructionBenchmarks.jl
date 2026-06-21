@@ -45,6 +45,7 @@ function julia_jet_process_threads(events::Vector{Vector{T}};
                                     strategy::RecoStrategy.Strategy,
                                     nsamples::Integer = 1,
                                     repeats::Int = 1,
+                                    gcoff::Bool = false,
                                     warmup_events::Int = 10) where T <: JetReconstruction.FourMomentum
     @info "Will process $(size(events)[1]) events"
 
@@ -81,11 +82,22 @@ function julia_jet_process_threads(events::Vector{Vector{T}};
 
     samples = Dict{String, Any}[]
 
+    GC.gc()
     for irun in 1:nsamples
-        timed = @timed Threads.@threads for event_counter ∈ 1:n_events * repeats
-            event_idx = mod1(event_counter, n_events)
-            inclusive_jets(jet_reconstruct(events[event_idx]; algorithm = algorithm, R = distance, p = p,
-                                           strategy = strategy), ptmin = ptmin)
+        gc_was_enabled = true
+        timed = try
+            if gcoff
+                gc_was_enabled = GC.enable(false)
+            end
+            @timed Threads.@threads for event_counter ∈ 1:n_events * repeats
+                event_idx = mod1(event_counter, n_events)
+                inclusive_jets(jet_reconstruct(events[event_idx]; algorithm = algorithm, R = distance, p = p,
+                                               strategy = strategy), ptmin = ptmin)
+            end
+        finally
+            if gcoff
+                GC.enable(gc_was_enabled)
+            end
         end
         dt_seconds = timed.time
         dt_μs = dt_seconds * 1e6
@@ -192,6 +204,10 @@ function parse_command_line(args)
         help = """Backend to use for the jet reconstruction: $(join(AllBackends, ", "))"""
         arg_type = Backends.Backend
         default = Backends.Julia
+
+        "--gcoff"
+        help = "Turn off garbage collection during timing"
+        action = :store_true
 
         "--info"
         help = "Print info level log messages"
@@ -376,6 +392,7 @@ function main()
                                                 p = args[:power],
                                                 strategy = args[:strategy],
                                                 nsamples = args[:nsamples], repeats = args[:repeats],
+                                                gcoff = args[:gcoff],
                                                 warmup_events = args[:warmup_events])
     summary = build_sample_summary(samples)
     git_info = git_metadata()

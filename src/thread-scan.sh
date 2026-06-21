@@ -20,6 +20,7 @@ Options:
   -n, --nsamples NSAMPLES          Timed samples per thread count (default: 5)
   -r, --repeats REPEATS            Full event-sample repeats per timed sample (default: 1)
   -w, --warmup-events EVENTS       Events processed before timing starts (default: 10)
+  -g, --gcoff                      Turn off garbage collection during timing
   -R, --radius RADIUS              Radius parameter (default: 0.4)
   -h, --help                       Show this help
 
@@ -34,6 +35,7 @@ Example:
     --nsamples 5 \
     --repeats 1 \
     --warmup-events 10 \
+    --gcoff \
     --radius 0.4
 EOF
 }
@@ -59,12 +61,13 @@ nsamples="5"
 repeats="1"
 warmup_events="10"
 radius="0.4"
+gcoff=false
 
 parse_options_with_getopt() {
   local parsed_args
   parsed_args=$(getopt \
-    -o o:A:S:i:l:t:n:r:w:R:h \
-    --long outdir:,algorithm:,strategy:,input-file:,label:,threads:,nsamples:,repeats:,warmup-events:,radius:,help \
+    -o o:A:S:i:l:t:n:r:w:R:g:h \
+    --long outdir:,algorithm:,strategy:,input-file:,label:,threads:,nsamples:,repeats:,warmup-events:,radius:,gcoff,help \
     -n thread-scan.sh -- "$@")
   eval set -- "$parsed_args"
 
@@ -105,6 +108,10 @@ parse_options_with_getopt() {
       -w|--warmup-events)
         warmup_events="$2"
         shift 2
+        ;;
+      -g|--gcoff)
+        gcoff=true
+        shift
         ;;
       -R|--radius)
         radius="$2"
@@ -175,6 +182,10 @@ parse_options_manually() {
         require_value "$@"
         warmup_events="$2"
         shift 2
+        ;;
+      -g|--gcoff)
+        gcoff=true
+        shift
         ;;
       -R|--radius)
         require_value "$@"
@@ -280,13 +291,21 @@ fi
 cd "$benchmark_dir"
 
 for threads in $threads_list; do
-  julia --threads="$threads" --project=. src/thread-run.jl \
+  cmd=(
+    julia --threads="$threads" --project=. src/thread-run.jl
     -A "$algorithm" \
     -S "$strategy" \
     -R "$radius" \
     --repeats "$repeats" \
     --nsamples "$nsamples" \
-    --warmup-events "$warmup_events" \
-    --output "$outdir/${algorithm}-${strategy}-${label}-t${threads}.json" \
+    --warmup-events "$warmup_events"
+  )
+  if [ "$gcoff" = true ]; then
+    cmd+=(--gcoff)
+  fi
+  cmd+=(
+    --output "$outdir/${algorithm}-${strategy}-${label}-t${threads}.json"
     "$input_file"
+  )
+  "${cmd[@]}"
 done

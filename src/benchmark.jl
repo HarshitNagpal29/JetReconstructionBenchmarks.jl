@@ -552,6 +552,7 @@ function main()
             results_file = args[:results]
         end
         @info "Writing results to $(results_file)"
+        mkpath(dirname(results_file))
         CSV.write(results_file, hepmc3_files_df)
     end
     

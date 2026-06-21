@@ -297,14 +297,14 @@ int main(int argc, char* argv[]) {
     const bool dump_trial = dump_option->is_set() && trial == 0;
 
     #ifdef _OPENMP
-    #pragma omp parallel for schedule(runtime) ordered
+    #pragma omp parallel for schedule(runtime)
     #endif
     for (long long ievt = first_event; ievt < last_event; ++ievt) {
       auto cluster_sequence = run_fastjet_clustering(events[ievt], strategy, algorithm, recombine_scheme, R, power);
       auto final_jets = select_final_jets(cluster_sequence, use_ptmin, ptmin, use_dijmax, dijmax, use_njets, njets);
       if (dump_trial) {
         #ifdef _OPENMP
-        #pragma omp ordered
+        #pragma omp critical
         #endif
         dump_event_jets(dump_fh, ievt+1, final_jets, cluster_sequence, debug_clusterseq_option->is_set());
       }

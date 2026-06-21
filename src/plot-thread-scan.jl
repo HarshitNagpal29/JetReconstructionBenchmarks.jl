@@ -34,7 +34,7 @@ function parse_command_line(args)
         "--split-by"
         help = "Column used to create separate plots. Use 'none' for one combined plot."
         arg_type = String
-        default = "input_file"
+        default = "none"
 
         "--group-by"
         help = "Comma-separated columns used to define plot lines"
