@@ -20,10 +20,16 @@ Options:
   -n, --nsamples NSAMPLES          Timed samples per thread count (default: 5)
   -r, --repeats REPEATS            Full event-sample repeats per timed sample (default: 1)
   -w, --warmup-events EVENTS       Events processed before timing starts (default: 10)
-  -g, --gcoff                      Turn off garbage collection during timing
-  -j, --julia-scheduler SCHEDULER  Julia threading scheduler
+  -g, --gcoff                      Disable GC during each timed sample
+  -j, --julia-scheduler SCHEDULER  default, dynamic, static, greedy, or chunked_atomic
+                                      (default: default)
+  -c, --chunk-size N               Atomic chunk size for chunked_atomic (default: 8)
   -R, --radius RADIUS              Radius parameter (default: 0.4)
   -h, --help                       Show this help
+
+The greedy scheduler requires Julia 1.11 or later. Scheduler selection applies
+to both warmup and timed loops. chunked_atomic assigns each static worker
+disjoint chunks claimed from a shared atomic counter.
 
 Example:
   ./src/thread-scan.sh \
@@ -37,7 +43,7 @@ Example:
     --repeats 1 \
     --warmup-events 10 \
     --gcoff \
-    --julia-scheduler default \
+    --julia-scheduler chunked_atomic \
     --radius 0.4
 EOF
 }
@@ -61,6 +67,7 @@ label="small"
 threads_list="1 2 4 8"
 nsamples="5"
 julia_scheduler="default"
+chunk_size="8"
 repeats="1"
 warmup_events="10"
 radius="0.4"
@@ -69,8 +76,8 @@ gcoff=false
 parse_options_with_getopt() {
   local parsed_args
   parsed_args=$(getopt \
-    -o o:A:S:i:l:t:n:r:w:R:gj:h \
-    --long outdir:,algorithm:,strategy:,input-file:,label:,threads:,nsamples:,repeats:,warmup-events:,radius:,gcoff,julia-scheduler:,help \
+    -o o:A:S:i:l:t:n:r:w:R:c:gj:h \
+    --long outdir:,algorithm:,strategy:,input-file:,label:,threads:,nsamples:,repeats:,warmup-events:,radius:,chunk-size:,gcoff,julia-scheduler:,help \
     -n thread-scan.sh -- "$@")
   eval set -- "$parsed_args"
 
@@ -118,6 +125,10 @@ parse_options_with_getopt() {
         ;;
       -j|--julia-scheduler)
         julia_scheduler="$2"
+        shift 2
+        ;;
+      -c|--chunk-size)
+        chunk_size="$2"
         shift 2
         ;;
       -R|--radius)
@@ -204,6 +215,11 @@ parse_options_manually() {
         julia_scheduler="$2"
         shift 2
         ;;
+      -c|--chunk-size)
+        require_value "$@"
+        chunk_size="$2"
+        shift 2
+        ;;
       -h|--help)
         usage
         exit 0
@@ -244,6 +260,14 @@ parse_options_manually() {
         warmup_events="${1#*=}"
         shift
         ;;
+      --julia-scheduler=*)
+        julia_scheduler="${1#*=}"
+        shift
+        ;;
+      --chunk-size=*)
+        chunk_size="${1#*=}"
+        shift
+        ;;
       --radius=*)
         radius="${1#*=}"
         shift
@@ -279,6 +303,26 @@ if [ -z "$outdir" ]; then
   exit 2
 fi
 
+case "$chunk_size" in
+  ''|*[!0-9]*)
+    echo "error: --chunk-size must be a positive integer, got '$chunk_size'" >&2
+    exit 2
+    ;;
+esac
+if [ "$chunk_size" -lt 1 ]; then
+  echo "error: --chunk-size must be >= 1, got '$chunk_size'" >&2
+  exit 2
+fi
+
+case "$julia_scheduler" in
+  default|dynamic|static|greedy|chunked_atomic)
+    ;;
+  *)
+    echo "error: --julia-scheduler must be one of: default, dynamic, static, greedy, chunked_atomic" >&2
+    exit 2
+    ;;
+esac
+
 mkdir -p "$outdir"
 outdir=$(CDPATH= cd -- "$outdir" && pwd)
 
@@ -310,19 +354,26 @@ for threads in $threads_list; do
     -R "$radius" \
     --repeats "$repeats" \
     --nsamples "$nsamples" \
-    --warmup-events "$warmup_events"
+    --warmup-events "$warmup_events" \
+    --julia-scheduler "$julia_scheduler" \
+    --chunk-size "$chunk_size"
   )
   if [ "$gcoff" = true ]; then
     cmd+=(--gcoff)
   fi
 
   scheduler_suff=""
-  if [ "$julia_scheduler" != "" ] && [ "$julia_scheduler" != "default" ]; then
-    cmd+=(--julia-scheduler "$julia_scheduler")
+  if [ "$julia_scheduler" = "chunked_atomic" ]; then
+    scheduler_suff="-chunked_atomic-c${chunk_size}"
+  elif [ "$julia_scheduler" != "default" ]; then
     scheduler_suff="-${julia_scheduler}"
   fi
+  gc_suff=""
+  if [ "$gcoff" = true ]; then
+    gc_suff="-gcoff"
+  fi
   cmd+=(
-    --output "$outdir/${algorithm}-${strategy}${scheduler_suff}-${label}-t${threads}.json"
+    --output "$outdir/${algorithm}-${strategy}${scheduler_suff}${gc_suff}-${label}-t${threads}.json"
     "$input_file"
   )
   "${cmd[@]}"

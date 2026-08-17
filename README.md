@@ -14,7 +14,11 @@ Main directory of source files and utilities for benchmarking:
 - `benchmark.jl` run timing tests for different backends, allowing switching of
   algorithm, strategy, etc. (will run over multiple event input files)
 - `thread-run.jl`, `thread-scan.sh`, and `thread-benchmark-all.sh` run the
-  Julia thread-scaling workflow described in `THREAD.md`
+  Julia thread-scaling workflow described in `THREAD.md`, including explicit
+  Julia scheduler and garbage-collection controls
+- `profile-run.jl` profiles the same event-level workload for pp N2Plain,
+  pp N2Tiled, and electron-positron N2Plain reconstruction; usage and artifact
+  descriptions are in `THREAD.md`
 - `merge-thread-scan.jl` and `plot-thread-scan.jl` merge and plot thread-scan
   outputs; they can be used with Julia JSON files and benchmark CSV files
 - `generate-benchmarks-{pp,ee,antikt}.sh` example files of how to generate a set

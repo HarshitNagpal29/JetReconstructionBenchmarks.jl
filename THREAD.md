@@ -92,9 +92,22 @@ julia --threads=1 --project=. src/thread-run.jl \
   data/events-pp-0.5TeV-5GeV.hepmc3.gz
 ```
 
+`--julia-scheduler` selects `default`, `dynamic`, `static`, `greedy`, or
+`chunked_atomic` for both warmup and timed loops. `greedy` requires Julia 1.11
+or later. The default is Julia's normal `@threads` scheduler.
+`chunked_atomic` starts one stable worker per Julia thread; workers claim
+disjoint event ranges from an atomic counter. Use `--chunk-size` to control the
+number of events in each claim (default: 8); the option can be omitted.
+
+`--gcoff` is a diagnostic option. Warmup runs with normal garbage collection;
+GC is disabled only inside each timed sample, then re-enabled and explicitly
+run before the next sample. GC-on and GC-off results are distinct workloads and
+should not be interpreted as interchangeable throughput measurements.
+
 The JSON output contains:
 
-- run parameters: algorithm, strategy, radius, input file, repeats, samples
+- run parameters: algorithm, strategy, radius, input file, repeats, samples,
+  Julia scheduler, and GC mode
 - timing fields: wall time, events/s, time per event
 - allocation and GC fields
 - raw per-sample measurements under `samples`
@@ -135,6 +148,9 @@ Options:
 -n, --nsamples NSAMPLES          timed samples per thread count
 -r, --repeats REPEATS            full event-sample repeats per timed sample
 -w, --warmup-events EVENTS       events processed before timing starts
+-g, --gcoff                      disable GC during each timed sample
+-j, --julia-scheduler SCHEDULER  default, dynamic, static, greedy, or chunked_atomic
+-c, --chunk-size N               optional atomic claim size (default: 8)
 -R, --radius RADIUS              radius parameter, typically 0.4 for pp workloads
 ```
 
@@ -162,6 +178,12 @@ results/thread-scaling/small/AntiKt-N2Plain/AntiKt-N2Plain-small-t2.json
 results/thread-scaling/small/AntiKt-N2Plain/AntiKt-N2Plain-small-t4.json
 results/thread-scaling/small/AntiKt-N2Plain/AntiKt-N2Plain-small-t8.json
 ```
+
+A non-default scheduler adds `-SCHEDULER` after the strategy. A chunked-atomic
+scan also adds `-cN`, recording its chunk size. GC-off adds `-gcoff`, so scans
+with different execution modes do not overwrite one another. For example,
+`AntiKt-N2Plain-chunked_atomic-c8-gcoff-small-t8.json` uses the default chunk
+size of eight events.
 
 Check the run:
 
@@ -195,6 +217,9 @@ pp      AntiKt/CA/Kt with N2Plain and N2Tiled
 ee      Durham with N2Plain
 all     both pp and ee workloads
 ```
+
+The full campaign accepts the same `--gcoff`, `--julia-scheduler`, and optional
+`--chunk-size` options. Generated plots group by GC mode and scheduler.
 
 Example:
 
@@ -339,14 +364,14 @@ julia --project=. src/plot-thread-scan.jl \
   results/benchmark-scan/small/summary.csv \
   results/benchmark-scan/small/plots \
   --metric efficiency \
-  --group-by code,backend,algorithm,strategy,R,p,schedule \
+  --group-by code,backend,algorithm,strategy,R,p,gcoff,schedule \
   --title "Small pp input"
 
 julia --project=. src/plot-thread-scan.jl \
   results/benchmark-scan/small/summary.csv \
   results/benchmark-scan/small/plots \
   --metric throughput \
-  --group-by code,backend,algorithm,strategy,R,p,schedule \
+  --group-by code,backend,algorithm,strategy,R,p,gcoff,schedule \
   --title "Small pp input" \
   --no-ideal
 ```
@@ -414,7 +439,7 @@ For a Durham e+e- scan:
   --nsamples 5 \
   --repeats 1 \
   --warmup-events 10 \
-  --radius 0.4
+  --radius 4.0
 ```
 
 ## Merge Results
@@ -429,7 +454,7 @@ julia --project=. src/merge-thread-scan.jl \
 
 `merge-thread-scan.jl` can also merge CSV files from `benchmark.jl`, or a mix of
 JSON and CSV files, as shown in the FastJet section above. The output contains
-one row for each workload, backend, schedule, and thread count.
+one row for each workload, backend, GC mode, schedule, and thread count.
 
 Important columns:
 
@@ -441,6 +466,7 @@ strategy
 R
 p
 input_file
+gcoff
 threads
 schedule
 events_per_second_median
@@ -523,16 +549,21 @@ julia --project=. src/plot-thread-scan.jl \
   --no-ideal
 ```
 
-By default, the plotter creates one plot per `input_file` and one line per
+By default, the plotter creates one combined plot and one line per
 `algorithm,strategy,R,p` combination:
 
 ```text
---split-by input_file
+--split-by none
 --group-by algorithm,strategy,R,p
 ```
 
-This keeps different multiplicities or event samples from being mixed into one
-figure by accident.
+When a summary contains multiple inputs, GC modes, or schedulers, include those
+columns in `--group-by` or choose one of them with `--split-by`. For example:
+
+```text
+--split-by input_file
+--group-by algorithm,strategy,R,p,gcoff,schedule
+```
 
 To put everything in a single plot:
 
@@ -583,6 +614,63 @@ Check the outputs:
 head -n 10 results/thread-scaling/example/summary.csv
 ls -lh results/thread-scaling/example/plots
 ```
+
+## Profiling N2Plain and N2Tiled
+
+`src/profile-run.jl` is the common profiler for pp N2Plain, pp N2Tiled, and
+electron-positron N2Plain reconstruction. Algorithm and strategy are ordinary
+command-line options; there is no separate profiler for Durham.
+
+Run an unprofiled AntiKt/N2Tiled control measurement:
+
+```sh
+julia --threads=8 --project=. src/profile-run.jl \
+  -A AntiKt -S N2Tiled -R 0.4 \
+  --julia-scheduler dynamic \
+  --profile-mode none \
+  --nsamples 5 --repeats 1 --warmup-events 20 \
+  --output results/profiles/antikt-n2tiled-control.json \
+  data/events-pp-13TeV-20GeV.hepmc3.gz
+```
+
+Run the corresponding Durham/N2Plain CPU profile:
+
+```sh
+julia --threads=8 --project=. src/profile-run.jl \
+  -A Durham -S N2Plain -R 4.0 \
+  --julia-scheduler dynamic \
+  --profile-mode cpu --nsamples 1 \
+  --profile-output results/profiles/durham-n2plain-cpu \
+  --output results/profiles/durham-n2plain-cpu.json \
+  data/events-ee-H.hepmc3.gz
+```
+
+Profiling modes are:
+
+```text
+none     control timing without a Julia profiler
+cpu      CPU sampling with Profile.@profile
+wall     wall-time sampling; requires Julia 1.12 or later
+alloc    allocation profiling with Profile.Allocs
+```
+
+Profiled modes require `--nsamples 1` and `--profile-output PREFIX`. CPU and
+wall profiles write flat, tree, raw serialized, and metadata artifacts.
+Allocation profiles write a text report, raw serialized data, and metadata.
+Keep `--allocation-sample-rate` small for large events; allocation profiling is
+usually most interpretable with one Julia compute thread.
+
+The default `--execution-mode owning` uses the public `jet_reconstruct` path and
+works with released JetReconstruction versions. `--execution-mode workspace`
+uses reusable N2Plain or N2Tiled storage when those APIs are available. It
+requires `--julia-scheduler chunked_atomic`; every static worker owns one
+workspace and one inclusive-output vector. `--chunk-size` controls the atomic
+claim size and defaults to 8 when omitted.
+
+Warmup, the compilation probe, and the measured region all execute the same
+event kernel and scheduler. Nevertheless, the profiler itself has overhead.
+Run a matched `--profile-mode none` control and pass its throughput with
+`--reference-events-per-second` when reporting an overhead fraction.
 
 ## Choosing `nsamples` and `repeats`
 
@@ -680,7 +768,7 @@ input files before it calls `thread-run.jl`.
 The JSON filename is based on:
 
 ```text
-ALGORITHM-STRATEGY-LABEL-tTHREADS.json
+ALGORITHM-STRATEGY[-SCHEDULER[-cCHUNK]][-gcoff]-LABEL-tTHREADS.json
 ```
 
 Running the same scan into the same directory overwrites previous files. Use a
@@ -689,20 +777,22 @@ new output directory for a new benchmark campaign.
 ### Comparing unlike workloads
 
 Speedup is only meaningful within the same workload: same algorithm, strategy,
-radius, power, input file, code, backend, and schedule. `merge-thread-scan.jl`
-computes baselines using these columns, so keep them consistent across thread
-counts.
+radius, power, input file, code, backend, GC mode, and schedule.
+`merge-thread-scan.jl` computes baselines using these columns, so keep them
+consistent across thread counts.
 
 ### Mixed-backend plot grouping
 
-For Julia-only plots, the default grouping is usually enough:
+For Julia-only plots containing a single GC mode and scheduler, the default
+grouping is enough:
 
 ```text
 --group-by algorithm,strategy,R,p
 ```
 
-For Julia-vs-FastJet plots, include the backend and schedule:
+For comparisons containing multiple modes or backends, include GC mode, backend,
+and schedule:
 
 ```text
---group-by code,backend,algorithm,strategy,R,p,schedule
+--group-by code,backend,algorithm,strategy,R,p,gcoff,schedule
 ```

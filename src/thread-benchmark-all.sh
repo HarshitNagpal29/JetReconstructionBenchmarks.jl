@@ -18,13 +18,19 @@ Options:
   -n, --nsamples N                 Timed samples per thread count
   -r, --repeats N                  Repeats per timed sample
   -w, --warmup-events N            Warmup events
-  -g, --gcoff                      Turn off garbage collection during timing
-  -j, --julia-scheduler SCHEDULER  Julia threading scheduler
+  -g, --gcoff                      Disable GC during each timed sample
+  -j, --julia-scheduler SCHEDULER  default, dynamic, static, greedy, or chunked_atomic
+                                      (default: default)
+  -c, --chunk-size N               Atomic chunk size for chunked_atomic (default: 8)
   -R, --radius R                   Jet radius
   -h, --help                       Show this help
   --dry-run                        Print commands without running them
   --suite SUITE                    Workload suite: pp, ee, all (default: pp)
   --force                          Allow writing into a non-empty output directory
+
+The greedy scheduler requires Julia 1.11 or later. Scheduler selection applies
+to both warmup and timed loops. chunked_atomic assigns each static worker
+disjoint chunks claimed from a shared atomic counter.
 EOF
 }
 
@@ -54,6 +60,7 @@ repeats="1"
 warmup_events="10"
 gcoff="false"
 julia_scheduler="default"
+chunk_size="8"
 radius="0.4"
 dry_run="false"
 suite="pp"
@@ -97,6 +104,10 @@ while [ "$#" -gt 0 ]; do
       julia_scheduler="$2"
       shift 2
       ;;
+    -c|--chunk-size)
+      chunk_size="$2"
+      shift 2
+      ;;
     -R|--radius)
       radius="$2"
       shift 2
@@ -135,6 +146,16 @@ require_positive_integer "--max-threads" "$max_threads"
 require_positive_integer "--nsamples" "$nsamples"
 require_positive_integer "--repeats" "$repeats"
 require_positive_integer "--warmup-events" "$warmup_events"
+require_positive_integer "--chunk-size" "$chunk_size"
+
+case "$julia_scheduler" in
+  default|dynamic|static|greedy|chunked_atomic)
+    ;;
+  *)
+    echo "error: --julia-scheduler must be one of: default, dynamic, static, greedy, chunked_atomic" >&2
+    exit 2
+    ;;
+esac
 
 threads_list=""
 
@@ -250,6 +271,7 @@ echo "  label: $label"
 echo "  threads: $threads_list"
 echo "  gcoff: $gcoff"
 echo "  julia scheduler: $julia_scheduler"
+echo "  chunk size: $chunk_size"
 echo
 
 echo "$workloads" | while read -r algorithm strategy; do
@@ -271,14 +293,12 @@ echo "$workloads" | while read -r algorithm strategy; do
     --nsamples "$nsamples"
     --repeats "$repeats"
     --warmup-events "$warmup_events"
+    --julia-scheduler "$julia_scheduler"
+    --chunk-size "$chunk_size"
 )
   if [ "$gcoff" = "true" ]; then
     cmd+=(--gcoff)
   fi
-  if [ "$julia_scheduler" != "" ] && [ "$julia_scheduler" != "default" ]; then
-    cmd+=(--julia-scheduler "$julia_scheduler")
-  fi
-
   cmd+=(--radius "$radius")
 
   if [ "$dry_run" = "true" ]; then
@@ -316,21 +336,21 @@ julia --project=. src/plot-thread-scan.jl \
   "$plots_dir" \
   --metric efficiency \
   --title "$label" \
-  --group-by algorithm,strategy,R,p,gcoff
+  --group-by algorithm,strategy,R,p,gcoff,schedule
 
 julia --project=. src/plot-thread-scan.jl \
   "$summary_csv" \
   "$plots_dir" \
   --metric speedup \
   --title "$label" \
-  --group-by algorithm,strategy,R,p,gcoff
+  --group-by algorithm,strategy,R,p,gcoff,schedule
 
 julia --project=. src/plot-thread-scan.jl \
   "$summary_csv" \
   "$plots_dir" \
   --metric throughput \
   --title "$label" \
-  --group-by algorithm,strategy,R,p,gcoff \
+  --group-by algorithm,strategy,R,p,gcoff,schedule \
   --no-ideal
 
 echo "Wrote plots:"
